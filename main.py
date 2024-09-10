@@ -36,7 +36,7 @@ while True:
     # time.sleep(1)
     # send_command_to_esp32(command2)
     # time.sleep(1)
-    command = input("Enter command: ")
+    command = input("Enter command: ")        # i.e: "switchon" or "switchoff"
     send_command_to_esp32(command)
     time.sleep(1)
 
