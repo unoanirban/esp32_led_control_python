@@ -13,10 +13,13 @@ def send_command_to_esp32(command):
 
         # Send the command to ESP32 (as bytes)
         client_socket.send(command.encode())
+        # print(f"{command.encode()}")        # To see how the encoded command looks like
 
         # Optional: Receive a response from ESP32
         response = client_socket.recv(1024)
+        # res_dec = response.decode()
         print(f"Response from ESP32: {response.decode()}")
+        # print(response)                   # To see the encoded response from ESP32
 
     except Exception as e:
         print(f"Error: {e}")
@@ -36,3 +39,5 @@ while True:
     command = input("Enter command: ")
     send_command_to_esp32(command)
     time.sleep(1)
+
+
