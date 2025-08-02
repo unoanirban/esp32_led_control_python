@@ -29,6 +29,7 @@ def send_command_to_esp32(command):
         client_socket.close()
 
 # Example usage
+# If you want to use different commands, make sure your ESP code is also has same commands
 # command1 = "switchon"
 # command2 = "switchoff"
 while True:
