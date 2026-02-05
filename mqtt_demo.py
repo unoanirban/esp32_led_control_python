@@ -8,15 +8,16 @@ from Adafruit_IO import MQTTClient
 # =======================
 # Configuration
 # =======================
-ADAFRUIT_IO_USERNAME = ''
+ADAFRUIT_IO_USERNAME = 'anirban_01'
 ADAFRUIT_IO_KEY = ''
 
 LED_FEED_ID = 'relay1'
-CAMERA_FEED_ID = 'humidity'
+CAMERA_FEED_ID = 'camera'
 
-LED_PIN = 12  # GPIO 12 (BCM)
+LED_PIN = 12   # GPIO 12 (BCM)
 
-IP_CAM_URL = 'http://192.168.xx.xx:8080/video'
+# Your IP Webcam stream URL
+IP_CAM_URL = 'http://192.168.1.5:8080/video'
 
 # =======================
 # GPIO Setup
@@ -29,30 +30,30 @@ GPIO.output(LED_PIN, GPIO.LOW)
 # MQTT Callbacks
 # =======================
 def connected(client):
-    print(f'Connected to Adafruit IO! Subscribing to {LED_FEED_ID}...')
+    print('Connected to Adafruit IO')
+    print('Subscribing to LED feed...')
     client.subscribe(LED_FEED_ID)
 
 def disconnected(client):
-    print('Disconnected from Adafruit IO!')
+    print('Disconnected from Adafruit IO')
     GPIO.cleanup()
     sys.exit(1)
 
 def message(client, feed_id, payload):
-    print(f'Feed {feed_id} received new value: {payload}')
+    print(f'{feed_id} → {payload}')
 
     if feed_id == LED_FEED_ID:
         if payload.upper() in ['ON', '1']:
             GPIO.output(LED_PIN, GPIO.HIGH)
-            print('LED ON')
+            print("LED ON")
         else:
             GPIO.output(LED_PIN, GPIO.LOW)
-            print('LED OFF')
+            print("LED OFF")
 
 # =======================
 # MQTT Client
 # =======================
 client = MQTTClient(ADAFRUIT_IO_USERNAME, ADAFRUIT_IO_KEY)
-
 client.on_connect = connected
 client.on_disconnect = disconnected
 client.on_message = message
@@ -65,43 +66,58 @@ client.connect()
 cap = cv2.VideoCapture(IP_CAM_URL)
 
 if not cap.isOpened():
-    print('Failed to open IP camera')
+    print("Cannot open IP camera")
     GPIO.cleanup()
     sys.exit(1)
 
-print('System running...')
+print("System started...")
 
 # =======================
 # Main Loop
 # =======================
 try:
     while True:
-        # Allow MQTT to receive LED commands
+
+        # Keep MQTT alive
         client.loop()
 
         ret, frame = cap.read()
         if not ret:
-            print('Camera frame not received')
+            print("Frame not received")
             time.sleep(1)
             continue
 
-        # Resize for MQTT safety
-        frame = cv2.resize(frame, (320, 240))
+        # -------- ULTRA COMPRESSION BLOCK --------
 
-        # Encode as JPEG
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 40])
+        # Very small resolution
+        frame = cv2.resize(frame, (120, 90))
 
-        # Convert to Base64
+        # Convert to grayscale
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # Very low JPEG quality
+        _, buffer = cv2.imencode(
+            '.jpg',
+            frame,
+            [cv2.IMWRITE_JPEG_QUALITY, 15]
+        )
+
         image_base64 = base64.b64encode(buffer).decode('utf-8')
 
-        # Publish image
-        client.publish(CAMERA_FEED_ID, image_base64)
-        print('Image sent')
+        size = len(image_base64)
+        print("Payload bytes:", size)
+
+        # Publish only if under limit
+        if size < 1000:
+            client.publish(CAMERA_FEED_ID, image_base64)
+            print("Image sent")
+        else:
+            print("Skipped — too large")
 
         time.sleep(1)
 
 except KeyboardInterrupt:
-    print('\nStopping program...')
+    print("Stopping...")
 
 finally:
     cap.release()
