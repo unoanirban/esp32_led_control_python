@@ -9,19 +9,18 @@ from Adafruit_IO import MQTTClient
 # Configuration
 # =======================
 ADAFRUIT_IO_USERNAME = 'anirban_01'
-ADAFRUIT_IO_KEY = ''
+ADAFRUIT_IO_KEY = 'YOUR_ACTUAL_API_KEY_HERE'  # <--- DON'T FORGET THIS
 
 LED_FEED_ID = 'relay1'
 CAMERA_FEED_ID = 'camera'
+LED_PIN = 12 
 
-LED_PIN = 12   # GPIO 12 (BCM)
-
-# Your IP Webcam stream URL
 IP_CAM_URL = 'http://192.168.1.5:8080/video'
 
 # =======================
 # GPIO Setup
 # =======================
+GPIO.setwarnings(False) # Good to silence warnings on restart
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(LED_PIN, GPIO.OUT)
 GPIO.output(LED_PIN, GPIO.LOW)
@@ -30,96 +29,88 @@ GPIO.output(LED_PIN, GPIO.LOW)
 # MQTT Callbacks
 # =======================
 def connected(client):
-    print('Connected to Adafruit IO')
-    print('Subscribing to LED feed...')
+    print(f'Connected to Adafruit IO. Listening for {LED_FEED_ID}...')
     client.subscribe(LED_FEED_ID)
 
 def disconnected(client):
     print('Disconnected from Adafruit IO')
-    GPIO.cleanup()
-    sys.exit(1)
 
 def message(client, feed_id, payload):
-    print(f'{feed_id} → {payload}')
-
+    # This now runs in a background thread, so it's instant!
     if feed_id == LED_FEED_ID:
+        print(f'Incoming Command: {payload}')
         if payload.upper() in ['ON', '1']:
             GPIO.output(LED_PIN, GPIO.HIGH)
-            print("LED ON")
         else:
             GPIO.output(LED_PIN, GPIO.LOW)
-            print("LED OFF")
 
 # =======================
-# MQTT Client
+# Main Logic
 # =======================
+# 1. Setup MQTT
 client = MQTTClient(ADAFRUIT_IO_USERNAME, ADAFRUIT_IO_KEY)
 client.on_connect = connected
 client.on_disconnect = disconnected
 client.on_message = message
 
-client.connect()
+try:
+    client.connect()
+    # loop_start runs the network loop in a background thread
+    client.loop_start() 
+except Exception as e:
+    print(f"Failed to connect to MQTT: {e}")
+    sys.exit(1)
 
-# =======================
-# Camera Setup
-# =======================
+# 2. Setup Camera
 cap = cv2.VideoCapture(IP_CAM_URL)
-
 if not cap.isOpened():
-    print("Cannot open IP camera")
+    print("Cannot open IP camera stream")
     GPIO.cleanup()
     sys.exit(1)
 
-print("System started...")
+print("System Running. Press Ctrl+C to stop.")
 
-# =======================
-# Main Loop
-# =======================
 try:
     while True:
-
-        # Keep MQTT alive
-        client.loop()
-
         ret, frame = cap.read()
         if not ret:
-            print("Frame not received")
+            print("Frame drop")
             time.sleep(1)
             continue
 
-        # -------- ULTRA COMPRESSION BLOCK --------
-
-        # Very small resolution
-        frame = cv2.resize(frame, (120, 90))
-
-        # Convert to grayscale
+        # -------- ULTRA COMPRESSION --------
+        # Resize to thumbnail (Maintain aspect ratio if possible, e.g., 4:3)
+        frame = cv2.resize(frame, (100, 75)) 
+        
+        # Grayscale
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # Very low JPEG quality
-        _, buffer = cv2.imencode(
-            '.jpg',
-            frame,
-            [cv2.IMWRITE_JPEG_QUALITY, 15]
-        )
+        # Encode: Quality 10 is very blocky but saves space
+        success, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 10])
+        
+        if success:
+            image_base64 = base64.b64encode(buffer).decode('utf-8')
+            size = len(image_base64)
 
-        image_base64 = base64.b64encode(buffer).decode('utf-8')
+            # Adafruit IO Free Tier Warning:
+            # If you exceed 1KB/sec frequently, you may get throttled (timeout).
+            if size < 1024: 
+                try:
+                    client.publish(CAMERA_FEED_ID, image_base64)
+                    print(f"Tx: {size} bytes")
+                except Exception as e:
+                    print(f"Publish failed: {e}")
+            else:
+                print(f"Skipped: {size} bytes (Too Large)")
 
-        size = len(image_base64)
-        print("Payload bytes:", size)
-
-        # Publish only if under limit
-        if size < 1000:
-            client.publish(CAMERA_FEED_ID, image_base64)
-            print("Image sent")
-        else:
-            print("Skipped — too large")
-
-        time.sleep(1)
+        # Throttle to respect rate limits (e.g., 1 frame every 3 seconds)
+        time.sleep(3) 
 
 except KeyboardInterrupt:
-    print("Stopping...")
+    print("\nStopping...")
 
 finally:
+    client.loop_stop() # Stop background thread
     cap.release()
     GPIO.cleanup()
     client.disconnect()
